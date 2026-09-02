@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      App theme. Compose (FetchCloneTheme) owns every in-app colour; this styles only
+      the window itself. `windowBackground` is a plain colour with a values-night
+      override so the brief cold-start window matches the app surface in light and dark.
+      enableEdgeToEdge() makes the system bars transparent at runtime.
+    -->
+    <style name="Theme.FetchClone" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
