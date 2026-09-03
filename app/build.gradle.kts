@@ -47,6 +47,7 @@ dependencies {
     implementation(project(":core:data"))
     implementation(project(":core:ui"))
     implementation(project(":feature:offers"))
+    implementation(project(":feature:receipts"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material3)
@@ -55,6 +56,9 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
+    // Bottom-bar icons. Declared explicitly rather than relying on material3 pulling it
+    // in transitively -- the same convention the feature modules follow.
+    implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.core.ktx)
 
     // The app owns the one shared Coil ImageLoader (network fetcher + crossfade).
@@ -63,9 +67,17 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // ProcessLifecycleOwner: the "app came to the foreground" trigger for the
+    // receipt outbox. Observed in FetchCloneApplication -- see the doc there for why
+    // the observation lives in :app rather than in :core:data.
+    implementation(libs.androidx.lifecycle.process)
 
     implementation(libs.hilt.android)
     implementation(libs.androidx.hilt.navigation.compose)
+    // hilt-work supplies HiltWorkerFactory, which FetchCloneApplication hands to
+    // WorkManager via Configuration.Provider so @HiltWorker workers can be injected.
+    implementation(libs.androidx.hilt.work)
+    implementation(libs.androidx.work.runtime)
     ksp(libs.hilt.compiler)
 
     testImplementation(libs.junit)

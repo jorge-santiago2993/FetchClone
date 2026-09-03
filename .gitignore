@@ -17,3 +17,5 @@ local.properties
 # Project exclude paths
 /build-logic/convention/build/
 /build-logic/convention/build/classes/kotlin/main/
+/Documentation
+JudgmentLog.md

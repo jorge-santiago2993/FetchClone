@@ -23,7 +23,6 @@ object OffersRoutes {
 
     // Keep the "{offerId}" placeholder in sync with [ARG_OFFER_ID].
     const val DETAIL = "offers/detail/{offerId}"
-    const val RECEIPTS = "receipts"
 
     fun detail(offerId: String): String = "offers/detail/$offerId"
 }

@@ -53,7 +53,45 @@ interface OffersDao {
     @Query("SELECT COUNT(*) FROM offers")
     fun observeCount(): Flow<Int>
 
-    /** Cleared at the start of every `LoadType.REFRESH` so the cache mirrors the server. */
+    /**
+     * Cleared at the start of every `LoadType.REFRESH` so the cache mirrors the server.
+     *
+     * Scoped to this one table: `DELETE FROM offers` cannot touch `receipts`. Worth
+     * stating explicitly because the receipt outbox shares this database, and a refresh
+     * wiping queued receipts would be catastrophic rather than merely inconvenient.
+     */
     @Query("DELETE FROM offers")
     suspend fun clearAll()
+
+    // ---------------------------------------------------------------------------------
+    // Non-paging reads, added for the receipt submission pipeline.
+    //
+    // This deliberately does NOT go through the Paging stack. Paging exists to stream a
+    // list into a scrolling UI; the caller below wants a small one-shot set for a
+    // background computation, and forcing that through a Pager would mean building
+    // paging infrastructure to immediately flatten it.
+    //
+    // There is deliberately no `offersByIds(...)` lookup for bonus-point matching. An
+    // earlier design had one; `ReceiptLineItem` explains why it was removed. The award
+    // reads promotional terms snapshotted onto the receipt at capture, so it cannot
+    // depend on whether a product happens to be cached when the receipt resolves.
+    // ---------------------------------------------------------------------------------
+
+    /**
+     * A random sample of cached offers — the stand-in for camera + OCR. `ReceiptScanner`
+     * uses it to fabricate the 3-4 line items a real scan would have produced.
+     *
+     * `ORDER BY RANDOM()` sorts the whole table to take a handful of rows. That is
+     * genuinely wasteful in general, and fine here: the offers cache holds tens to low
+     * hundreds of rows (one to a few pages of 20), it runs once per button press, and it
+     * never blocks the UI. The alternative — `WHERE id >= (random offset)` against a
+     * `COUNT(*)` — is faster on a large table but biased when ids are sparse, which they
+     * are here after `clearAll()` cycles. Correct and simple beats fast for a simulation
+     * of a feature we are not building.
+     *
+     * Returns fewer rows than requested (including none) when the cache is cold. Callers
+     * must handle that — the feed may never have been opened.
+     */
+    @Query("SELECT * FROM offers ORDER BY RANDOM() LIMIT :limit")
+    suspend fun randomOffers(limit: Int): List<OfferEntity>
 }

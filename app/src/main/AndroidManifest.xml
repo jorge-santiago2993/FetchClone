@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      Read-only connectivity state, for NetworkMonitor. The receipt outbox asks "is there a
+      validated internet connection?" before attempting an upload, so a pass with no radio
+      does not consume a receipt's retry budget - see NetworkMonitor for the bug this fixes.
+
+      Normal (non-dangerous) permission: granted at install, no runtime prompt.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:name=".FetchCloneApplication"
@@ -13,6 +22,39 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.FetchClone">
+
+        <!--
+          Removes WorkManager's default App Startup initializer so the app can supply its
+          own Configuration.
+
+          Since WorkManager 2.6, `androidx.startup` initializes WorkManager automatically
+          via this content provider, with a stock Configuration. That default has never
+          heard of Hilt's worker factory, so `ReceiptUploadWorker` — which has an
+          @AssistedInject constructor — could not be built, and would fail at runtime with
+          "Could not instantiate ReceiptUploadWorker".
+
+          With the initializer removed, WorkManager comes up lazily on the first
+          `getInstance(context)` call and reads `FetchCloneApplication`'s
+          `workManagerConfiguration`. Removing it also means WorkManager is no longer
+          constructed during every cold start, whether or not the app needs it, which is a
+          small startup win on top of the correctness fix.
+
+          `tools:node="merge"` on the provider keeps the entry that androidx.startup's own
+          manifest contributes and edits it, rather than replacing it; `tools:node="remove"`
+          on the meta-data drops just the WorkManager initializer while leaving any other
+          library's startup component intact.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

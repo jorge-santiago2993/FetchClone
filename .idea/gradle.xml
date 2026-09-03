@@ -28,6 +28,7 @@
             <option value="$PROJECT_DIR$/core/ui" />
             <option value="$PROJECT_DIR$/feature" />
             <option value="$PROJECT_DIR$/feature/offers" />
+            <option value="$PROJECT_DIR$/feature/receipts" />
           </set>
         </option>
       </GradleProjectSettings>
