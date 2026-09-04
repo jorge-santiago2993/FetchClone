@@ -142,5 +142,51 @@ internal val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+/**
+ * v3 -> v4: `receipts.userId`, so the outbox becomes per-account rather than per-device.
+ *
+ * ## Why this one is an `ALTER TABLE` and [MIGRATION_2_3] was a `DROP`
+ *
+ * The difference is not stylistic, it is a change in what the table holds.
+ * [MIGRATION_2_3] documents its own reasoning explicitly -- it could drop and recreate
+ * because at that point `receipts` was scaffolding nobody had written to. That claim
+ * stopped being true the moment the outbox shipped. This table now holds **un-uploaded
+ * user data**: receipts the app has already told the user were saved, and which exist
+ * nowhere else. Dropping it would be silent, permanent data loss on upgrade.
+ *
+ * So the column is added in place, with a default, which is the one schema change SQLite
+ * performs cheaply and without a table rewrite.
+ *
+ * ## The orphan problem, and why the honest answer is to leave them
+ *
+ * Rows written before this version have no owner -- they were captured when the app had no
+ * concept of a user. `DEFAULT 0` marks them, and [ReceiptEntity.ORPHANED_USER_ID] names
+ * that value so the intent is greppable. Because every query added in v4 filters on the
+ * signed-in user, orphans are **invisible and never uploaded**.
+ *
+ * They are deliberately *not* deleted. A migration that destroys user data to tidy up a
+ * schema is exactly the failure this database removed `fallbackToDestructiveMigration`
+ * to prevent, and the rows cost nothing to keep.
+ *
+ * **Alternative considered and declined: let the first user to sign in adopt them.** It
+ * is defensible -- in practice the person upgrading is the person who scanned them -- and
+ * it is what a real product would probably choose, paired with a prompt. Declined here
+ * because it is a *product* decision dressed as a technical one, and because a wrong guess
+ * credits one person's receipts to another's points balance. Stranding data is
+ * recoverable; misattributing it is not.
+ */
+internal val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // `NOT NULL DEFAULT 0` rather than a nullable column: "unowned" is a real state
+        // with one meaning, and a nullable Int would force every read site to decide what
+        // null meant. Room also requires the default to be declared identically in the
+        // entity via @ColumnInfo, or schema validation fails on open -- see ReceiptEntity.
+        db.execSQL("ALTER TABLE `receipts` ADD COLUMN `userId` INTEGER NOT NULL DEFAULT 0")
+        // Every per-user query filters on (userId, status). Indexing userId keeps the
+        // existing status index useful rather than leaving both queries to scan.
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_receipts_userId` ON `receipts` (`userId`)")
+    }
+}
+
 /** Every migration, in the order Room should consider them. Passed to `addMigrations`. */
-internal val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+internal val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)

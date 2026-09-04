@@ -9,6 +9,7 @@ import com.fetchclone.core.data.database.FetchCloneDatabase
 import com.fetchclone.core.data.database.entity.OfferEntity
 import com.fetchclone.core.data.mapper.toDomain
 import com.fetchclone.core.data.model.Offer
+import com.fetchclone.core.network.FetchCloneApi
 import com.fetchclone.core.data.network.ProductsApi
 import com.fetchclone.core.data.paging.OffersRemoteMediator
 import kotlinx.coroutines.flow.Flow
@@ -66,7 +67,7 @@ class DefaultOffersRepository @Inject constructor(
         // the PagingSource as the UI scrolls. This method returns that Flow, not a Pager.
         Pager(
             config = PagingConfig(
-                // Match the API's natural page size (ProductsApi.DEFAULT_PAGE_SIZE).
+                // Match the API's natural page size (FetchCloneApi.DEFAULT_PAGE_SIZE).
                 // Everything else stays at its default on purpose:
                 //
                 //  - enablePlaceholders = true. This is LOAD-BEARING for a
@@ -86,7 +87,7 @@ class DefaultOffersRepository @Inject constructor(
                 //  - initialLoadSize = pageSize * 3 (the default). A larger first load
                 //    fills the viewport + prefetch window in one shot instead of
                 //    triggering an immediate APPEND cascade.
-                pageSize = ProductsApi.DEFAULT_PAGE_SIZE,
+                pageSize = FetchCloneApi.DEFAULT_PAGE_SIZE,
             ),
             remoteMediator = OffersRemoteMediator(api, database, _feedRefreshState),
             pagingSourceFactory = { offersDao.pagingSource() },

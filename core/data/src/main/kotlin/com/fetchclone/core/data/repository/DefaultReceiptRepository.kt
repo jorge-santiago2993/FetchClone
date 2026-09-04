@@ -7,6 +7,7 @@ import com.fetchclone.core.data.di.IoDispatcher
 import com.fetchclone.core.data.mapper.ReceiptLineItemsCodec
 import com.fetchclone.core.data.mapper.newReceiptEntity
 import com.fetchclone.core.data.mapper.toDomain
+import com.fetchclone.core.data.model.AuthState
 import com.fetchclone.core.data.model.Receipt
 import com.fetchclone.core.data.model.ReceiptStatus
 import com.fetchclone.core.data.network.CartsApi
@@ -24,7 +25,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -88,9 +93,11 @@ import javax.inject.Singleton
  * swap in a test dispatcher and get determinism.
  */
 @Singleton
+@OptIn(ExperimentalCoroutinesApi::class)
 internal class DefaultReceiptRepository @Inject constructor(
     private val receiptDao: ReceiptDao,
     private val cartsApi: CartsApi,
+    private val authRepository: AuthRepository,
     private val scanner: ReceiptScanner,
     private val networkMonitor: NetworkMonitor,
     private val processor: ReceiptProcessor,
@@ -120,6 +127,13 @@ internal class DefaultReceiptRepository @Inject constructor(
     private var hasRecoveredStalledUploads = false
 
     override suspend fun submitSimulatedScan(): SubmitResult = withContext(ioDispatcher) {
+        // The owner is resolved HERE, at capture, not at upload. Same reasoning as
+        // snapshotting `discountPercentage` into the line items: a receipt records the
+        // world as it was when the user acted. Reading the user at upload time would
+        // attribute a receipt scanned offline by one account to whoever happened to be
+        // signed in when connectivity returned -- and points are money-adjacent.
+        val user = authRepository.currentUser() ?: return@withContext SubmitResult.SignedOut
+
         val lineItems = scanner.scan()
         if (lineItems.isEmpty()) return@withContext SubmitResult.NoOffersCached
 
@@ -130,7 +144,12 @@ internal class DefaultReceiptRepository @Inject constructor(
         // fail the submission. Once this returns, the receipt is durable and the user's
         // part is done.
         receiptDao.insert(
-            newReceiptEntity(id = receiptId, capturedAt = clock.millis(), lineItems = lineItems),
+            newReceiptEntity(
+                id = receiptId,
+                userId = user.id,
+                capturedAt = clock.millis(),
+                lineItems = lineItems,
+            ),
         )
 
         // ── TRIGGERS, strictly after the commit ───────────────────────────────────────
@@ -153,11 +172,30 @@ internal class DefaultReceiptRepository @Inject constructor(
         SubmitResult.Success(receiptId)
     }
 
+    /**
+     * The signed-in user's receipts, re-subscribing whenever the session changes.
+     *
+     * `flatMapLatest` over [AuthRepository.authState] rather than a one-shot read of the
+     * current user: the receipts screen can be on screen when a session expires, and a
+     * plain `observeForUser(idReadOnce)` would keep showing the previous account's
+     * receipts until something happened to recreate the ViewModel. Signing out emits an
+     * empty list, and signing in as someone else swaps the query to their rows.
+     */
     override fun observeReceipts(): Flow<List<Receipt>> =
-        // Mapped at the edge so entities never leave :core:data. Not wrapped in
-        // `flowOn(ioDispatcher)`: Room already emits on its own executor, and the mapping
-        // is a cheap in-memory transform of a page-sized list.
-        receiptDao.observeAll().map { entities -> entities.map(ReceiptEntity::toDomain) }
+        authRepository.authState
+            .map { state -> (state as? AuthState.Authenticated)?.user?.id }
+            .distinctUntilChanged()
+            .flatMapLatest { userId ->
+                if (userId == null) {
+                    flowOf(emptyList())
+                } else {
+                    // Mapped at the edge so entities never leave :core:data. Not wrapped in
+                    // `flowOn(ioDispatcher)`: Room already emits on its own executor, and
+                    // the mapping is a cheap in-memory transform of a page-sized list.
+                    receiptDao.observeForUser(userId)
+                        .map { entities -> entities.map(ReceiptEntity::toDomain) }
+                }
+            }
 
     override suspend fun processQueue(): Boolean = withContext(ioDispatcher) {
         uploadMutex.withLock {
@@ -181,21 +219,32 @@ internal class DefaultReceiptRepository @Inject constructor(
             //
             // See NetworkMonitor for the reproduction this prevents.
             if (!networkMonitor.isOnline()) {
-                return@withLock reportWorkRemaining()
+                return@withLock reportWorkRemaining(userId = authRepository.currentUser()?.id)
             }
+
+            // ── PRE-FLIGHT: do not attempt without a session ──────────────────────────
+            // The exact shape of the connectivity gate above, for the exact same reason.
+            // Without a valid session every upload would 401, and while
+            // `UploadFailure.Unauthenticated` handles that correctly, discovering it once
+            // per receipt spends a request each to learn something we can read locally.
+            //
+            // The symmetry is the story worth telling: the outbox refuses to charge a
+            // receipt for a problem that is not the receipt's. No radio, no session --
+            // neither is the receipt's fault, and neither costs it an attempt.
+            val user = authRepository.currentUser() ?: return@withLock reportWorkRemaining(userId = null)
 
             // `now` is read once, so every receipt in this pass is judged against the same
             // instant. Re-reading the clock per receipt would let a slow pass start
             // treating receipts as due mid-loop, making the batch non-deterministic and
             // the tests unreproducible.
             val now = clock.millis()
-            val pending = receiptDao.findPending(now, ReceiptStatus.MAX_UPLOAD_ATTEMPTS)
+            val pending = receiptDao.findPending(user.id, now, ReceiptStatus.MAX_UPLOAD_ATTEMPTS)
 
             for (entity in pending) {
                 uploadOne(entity)
             }
 
-            reportWorkRemaining()
+            reportWorkRemaining(userId = user.id)
         }
     }
 
@@ -213,8 +262,15 @@ internal class DefaultReceiptRepository @Inject constructor(
      * calling this on every pass cannot reset a backoff or displace a job that is about to
      * run.
      */
-    private suspend fun reportWorkRemaining(): Boolean {
-        val workRemains = receiptDao.countPendingUploads(ReceiptStatus.MAX_UPLOAD_ATTEMPTS) > 0
+    /**
+     * @param userId the signed-in account, or null when there is no session. With no
+     *   session there is no work *this app can do*, so nothing is rescheduled — a worker
+     *   re-armed while signed out would wake, find no session, and re-arm itself forever.
+     *   Signing back in runs a fresh pass, which re-arms it if anything is still pending.
+     */
+    private suspend fun reportWorkRemaining(userId: Int?): Boolean {
+        if (userId == null) return false
+        val workRemains = receiptDao.countPendingUploads(userId, ReceiptStatus.MAX_UPLOAD_ATTEMPTS) > 0
         if (workRemains) scheduler.scheduleUpload()
         return workRemains
     }
@@ -296,13 +352,27 @@ internal class DefaultReceiptRepository @Inject constructor(
                 // it restores the row instead of recording a failure against it. The
                 // constrained worker takes it from here.
                 UploadFailure.Deferred -> receiptDao.releaseUploadClaim(entity.id)
+
+                // The session died between the pre-flight check and this response. Same
+                // treatment as Deferred and for the same reason: the receipt is not at
+                // fault, so it keeps its full attempt budget and simply waits -- here, for
+                // the user to sign in again rather than for a radio.
+                //
+                // Note what this prevents. Without the branch, a 401 is a 4xx, and a 4xx
+                // is REJECTED -- the app would tell the user their receipt was refused
+                // because their token expired. See UploadFailure.Unauthenticated.
+                UploadFailure.Unauthenticated -> receiptDao.releaseUploadClaim(entity.id)
             }
         }
     }
 
     override suspend fun reconcileProcessing(): Unit = withContext(ioDispatcher) {
         reconcileMutex.withLock {
-            for (entity in receiptDao.findProcessing()) {
+            // No session, nothing to reconcile: polling is an authenticated call, and the
+            // receipts of a signed-out user are not this session's business.
+            val user = authRepository.currentUser() ?: return@withLock
+
+            for (entity in receiptDao.findProcessing(user.id)) {
                 try {
                     when (val outcome = processor.poll(entity.toDomain())) {
                         // No decision yet. Leave the row exactly as it is; the next
@@ -366,10 +436,14 @@ internal class DefaultReceiptRepository @Inject constructor(
  */
 private fun ReceiptEntity.toCartRequest(): CartRequest =
     CartRequest(
+        // The receipt's own stored owner, stamped at capture -- not a lookup of who is
+        // signed in right now. A receipt scanned offline by one account and uploaded after
+        // a different account signs in must still be credited to the person who scanned it.
+        //
         // Passed explicitly, never defaulted: kotlinx.serialization omits default values
         // from the encoded JSON, so a Kotlin default here would silently drop the field
         // the server requires and every upload would 400. See CartRequest.
-        userId = CartRequest.DEFAULT_USER_ID,
+        userId = userId,
         products = ReceiptLineItemsCodec.decode(lineItemsJson).map { item ->
             CartProductRequest(id = item.productId, quantity = item.quantity)
         },

@@ -72,8 +72,8 @@ interface ReceiptDao {
      * Ordered by `capturedAt`, not by status: the list is a chronological history, and
      * a receipt must not jump around as it uploads.
      */
-    @Query("SELECT * FROM receipts ORDER BY capturedAt DESC")
-    fun observeAll(): Flow<List<ReceiptEntity>>
+    @Query("SELECT * FROM receipts WHERE userId = :userId ORDER BY capturedAt DESC")
+    fun observeForUser(userId: Int): Flow<List<ReceiptEntity>>
 
     /** Single-row read, for reconciliation and for tests asserting on a transition. */
     @Query("SELECT * FROM receipts WHERE id = :id")
@@ -102,17 +102,30 @@ interface ReceiptDao {
      * Returns a `List`, not a `Flow`: this is a one-shot work queue read, and a self-
      * retriggering stream over a table the processor is actively writing to is a loop
      * waiting to happen.
+     *
+     * ### Why the queue is scoped to one user
+     *
+     * `userId` was added in v4 with authentication. Without it, signing in as a second
+     * account on the same device would upload the first account's receipts under the
+     * second account's credentials — crediting one person's shopping to another's points
+     * balance. That is money-adjacent, so it gets a `WHERE` clause rather than a
+     * convention.
+     *
+     * The filter also quietly handles the pre-auth rows: they carry
+     * [com.fetchclone.core.data.database.entity.ORPHANED_USER_ID], which matches no real
+     * account, so they are never selected for upload. See `MIGRATION_3_4`.
      */
     @Query(
         """
         SELECT * FROM receipts
-        WHERE status IN ('${ReceiptStatusColumn.QUEUED}', '${ReceiptStatusColumn.FAILED}')
+        WHERE userId = :userId
+          AND status IN ('${ReceiptStatusColumn.QUEUED}', '${ReceiptStatusColumn.FAILED}')
           AND (nextAttemptAt IS NULL OR nextAttemptAt <= :now)
           AND attemptCount < :maxAttempts
         ORDER BY capturedAt ASC
         """,
     )
-    suspend fun findPending(now: Long, maxAttempts: Int): List<ReceiptEntity>
+    suspend fun findPending(userId: Int, now: Long, maxAttempts: Int): List<ReceiptEntity>
 
     /**
      * Receipts the server has accepted but not yet resolved — the reconciliation queue.
@@ -124,11 +137,13 @@ interface ReceiptDao {
     @Query(
         """
         SELECT * FROM receipts
-        WHERE status = '${ReceiptStatusColumn.PROCESSING}' AND serverId IS NOT NULL
+        WHERE userId = :userId
+          AND status = '${ReceiptStatusColumn.PROCESSING}'
+          AND serverId IS NOT NULL
         ORDER BY capturedAt ASC
         """,
     )
-    suspend fun findProcessing(): List<ReceiptEntity>
+    suspend fun findProcessing(userId: Int): List<ReceiptEntity>
 
     // -----------------------------------------------------------------------------
     // Transitions. Each returns the rows updated: 1 = the claim/transition succeeded,
@@ -302,9 +317,10 @@ interface ReceiptDao {
     @Query(
         """
         SELECT COUNT(*) FROM receipts
-        WHERE status IN ('${ReceiptStatusColumn.QUEUED}', '${ReceiptStatusColumn.FAILED}')
+        WHERE userId = :userId
+          AND status IN ('${ReceiptStatusColumn.QUEUED}', '${ReceiptStatusColumn.FAILED}')
           AND attemptCount < :maxAttempts
         """,
     )
-    suspend fun countPendingUploads(maxAttempts: Int): Int
+    suspend fun countPendingUploads(userId: Int, maxAttempts: Int): Int
 }

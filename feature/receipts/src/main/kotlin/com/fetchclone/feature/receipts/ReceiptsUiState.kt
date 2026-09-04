@@ -104,4 +104,15 @@ enum class UserMessage {
      * `ReceiptScanner`.
      */
     NO_OFFERS_TO_SCAN,
+
+    /**
+     * The scan button was pressed with no signed-in user.
+     *
+     * Reachable only through a race: this screen lives inside the authenticated graph, so
+     * a session would have to expire between the frame rendering and the tap. Handled
+     * anyway because the alternative is a silent no-op -- the user taps, nothing appears in
+     * the list, and there is no explanation. The forced-logout observer in `:app` will move
+     * them to the login screen a moment later; this message is what covers the gap.
+     */
+    SIGNED_OUT,
 }

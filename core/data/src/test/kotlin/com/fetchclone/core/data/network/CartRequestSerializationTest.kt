@@ -13,7 +13,7 @@ import org.junit.Test
  * ## Why this test exists
  *
  * It is a regression test for a bug that shipped past every other check in this project.
- * `CartRequest.userId` had a Kotlin default (`= DEFAULT_USER_ID`), and
+ * `CartRequest.userId` had a Kotlin default (`= 1`), and
  * kotlinx.serialization does not encode default values — `encodeDefaults` is `false` out of
  * the box — so the field never reached the wire. DummyJSON answered
  * `400 {"message":"User id is required"}` and the outbox dutifully classified it as a
@@ -54,7 +54,7 @@ class CartRequestSerializationTest {
     fun `the encoded body always carries userId`() {
         val body = json.encodeToString(
             CartRequest(
-                userId = CartRequest.DEFAULT_USER_ID,
+                userId = 1,
                 products = listOf(CartProductRequest(id = 144, quantity = 4)),
             ),
         )

@@ -1,5 +1,6 @@
 package com.fetchclone.core.data.database.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -91,17 +92,47 @@ import androidx.room.PrimaryKey
  */
 @Entity(
     tableName = "receipts",
-    indices = [Index(value = ["status"])],
+    indices = [Index(value = ["status"]), Index(value = ["userId"])],
 )
 data class ReceiptEntity(
     @PrimaryKey val id: String,
+    /**
+     * Who scanned this receipt.
+     *
+     * Added in v4 alongside authentication, and it is what turns the outbox from a device
+     * queue into a **per-account** one. Two things depend on it:
+     *
+     * - The upload body's `userId`, which previously used a hardcoded constant.
+     * - `findPending` and `observeForUser`, so that signing in as someone else cannot
+     *   upload -- or even display -- receipts that are not theirs. Without the filter, a
+     *   shared or resold device would attribute one person's scans to another's points
+     *   balance, which is money-adjacent and therefore not a rounding error.
+     *
+     * Captured at scan time from the in-memory session rather than read at upload time,
+     * for the same reason `discountPercentage` is snapshotted into the line items: the
+     * value must reflect the world **as it was when the user acted**. Reading it at upload
+     * would attribute a receipt scanned offline by one user to whoever happened to be
+     * signed in when connectivity returned.
+     *
+     * [ORPHANED_USER_ID] marks rows that predate authentication; see `MIGRATION_3_4`.
+     *
+     * The `defaultValue` is **required**, not decorative: `MIGRATION_3_4` adds the column
+     * with `DEFAULT 0`, and Room compares the live schema against the entity on open. Omit
+     * it here and an upgraded install crashes with a schema mismatch while a fresh install
+     * works perfectly -- a failure that only ever reproduces on a device that had the old
+     * version.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val userId: Int,
     val capturedAt: Long,
     val lineItemsJson: String,
-    // No @ColumnInfo(defaultValue = ...) on `status` / `attemptCount`. Column defaults
-    // earn their keep when a later migration does ALTER TABLE ADD COLUMN on a NOT NULL
-    // column, which needs one. Nothing inserts a receipt without an explicit status —
-    // `submit()` is the only writer — so a default would be schema surface we never
-    // exercise, and one more thing the hand-written migration DDL has to match exactly.
+    // Still no @ColumnInfo(defaultValue = ...) on `status` / `attemptCount`, and the
+    // original reasoning has now been tested by events: "column defaults earn their keep
+    // when a later migration does ALTER TABLE ADD COLUMN on a NOT NULL column, which needs
+    // one." That is exactly what `userId` above turned out to be, and it carries a default
+    // for precisely that reason. These two do not, because nothing inserts a receipt
+    // without an explicit status — `submit()` is the only writer — so a default would be
+    // schema surface we never exercise and one more thing the migration DDL must match.
     // Same discipline as OfferEntity's "no indexes we don't query".
     val status: String,
     val attemptCount: Int = 0,
@@ -110,6 +141,16 @@ data class ReceiptEntity(
     val awardedPoints: Int? = null,
     val rejectReason: String? = null,
 )
+
+/**
+ * The `userId` of receipts captured before authentication existed.
+ *
+ * Zero is safe as a sentinel because DummyJSON user ids start at 1, so it can never
+ * collide with a real account. Rows carrying it are matched by no per-user query, which is
+ * the intended outcome: invisible and never uploaded, but never deleted either. See
+ * `MIGRATION_3_4` for why adoption was considered and declined.
+ */
+const val ORPHANED_USER_ID: Int = 0
 
 /**
  * The exact strings stored in [ReceiptEntity.status].

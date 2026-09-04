@@ -34,6 +34,9 @@ android {
     }
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG gates the login screen's "use demo account" shortcut. Off by
+        // default since AGP 8, so it has to be asked for explicitly.
+        buildConfig = true
     }
 }
 
@@ -46,6 +49,7 @@ kotlin {
 dependencies {
     implementation(project(":core:data"))
     implementation(project(":core:ui"))
+    implementation(project(":feature:auth"))
     implementation(project(":feature:offers"))
     implementation(project(":feature:receipts"))
 

@@ -13,13 +13,37 @@ ksp {
     arg("room.schemaLocation", "${projectDir}/schemas")
 }
 
+/*
+ * Ships the exported Room schemas inside the androidTest APK.
+ *
+ * `MigrationTestHelper` builds an *old* schema version from these JSON files at runtime, so
+ * they have to be assets of the test APK -- without them it fails with "Cannot find the
+ * schema file", which reads like a missing dependency rather than a missing asset.
+ *
+ * Configured through `com.android.build.api.dsl.LibraryExtension` rather than the `android { }`
+ * block above. AGP 9's generated Kotlin DSL accessor for `sourceSets` is still typed against
+ * the legacy `AndroidLibrarySourceSet`, so `android { sourceSets.named("androidTest") { } }`
+ * fails at configuration time with a ClassCastException that names two AGP-internal types and
+ * says nothing about source sets. Reaching for the new DSL interface explicitly avoids the
+ * stale accessor -- the same interface `AndroidLibraryConventionPlugin` already uses.
+ */
+extensions.configure<com.android.build.api.dsl.LibraryExtension>("android") {
+    sourceSets.named("androidTest") {
+        assets.srcDirs(files("${projectDir}/schemas"))
+    }
+}
+
 dependencies {
-    implementation(libs.retrofit.core)
-    implementation(libs.retrofit.converter.kotlinx.serialization)
-    implementation(platform(libs.okhttp.bom))
-    implementation(libs.okhttp.core)
-    implementation(libs.okhttp.logging.interceptor)
-    implementation(libs.kotlinx.serialization.json)
+    // The HTTP stack -- client, Retrofit, JSON codec, and everything to do with the
+    // bearer token -- lives in :core:network. This module keeps only the service
+    // interfaces and DTOs: *what* we ask the backend for, not *how* we talk to it.
+    //
+    // `implementation`, not `api`, and that is the load-bearing choice: it means an
+    // OkHttpClient, an Interceptor, a TokenStore or an AuthApi cannot reach the compile
+    // classpath of :feature:offers or :feature:receipts even by accident. Retrofit and
+    // kotlinx-serialization.json arrive transitively because :core:network exposes them
+    // as `api` -- the service interfaces below need Retrofit's annotations.
+    implementation(project(":core:network"))
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
@@ -55,10 +79,17 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 
-    testImplementation(libs.kotlinx.serialization.json)
-    testImplementation(libs.retrofit.core)
+    // Tests build their own Retrofit against MockWebServer (and, in one case, the live
+    // API), so they need the converter and OkHttp directly rather than through
+    // :core:network's providers.
     testImplementation(libs.retrofit.converter.kotlinx.serialization)
+    testImplementation(platform(libs.okhttp.bom))
+    testImplementation(libs.okhttp.core)
     testImplementation(libs.room.testing)
     testImplementation(libs.androidx.paging.testing)
     testImplementation(libs.androidx.work.testing)
+
+    // MigrationTestHelper needs an instrumentation context, so the migration test is an
+    // androidTest even though it never touches the UI.
+    androidTestImplementation(libs.room.testing)
 }

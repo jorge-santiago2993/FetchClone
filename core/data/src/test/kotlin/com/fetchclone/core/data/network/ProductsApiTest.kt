@@ -12,7 +12,7 @@ import org.junit.Test
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 
-/** Verifies request shape and response parsing for `GET /products` against MockWebServer. */
+/** Verifies request shape and response parsing for `GET /auth/products` against MockWebServer. */
 class ProductsApiTest {
 
     private lateinit var server: MockWebServer
@@ -48,7 +48,7 @@ class ProductsApiTest {
 
         val recorded = server.takeRequest()
         assertEquals("GET", recorded.method)
-        assertEquals("/products?limit=20&skip=40", recorded.target)
+        assertEquals("/auth/products?limit=20&skip=40", recorded.target)
     }
 
     @Test
@@ -77,7 +77,7 @@ class ProductsApiTest {
 
         api.getProducts()
 
-        assertEquals("/products?limit=20&skip=0", server.takeRequest().target)
+        assertEquals("/auth/products?limit=20&skip=0", server.takeRequest().target)
     }
 
     private fun jsonResponse(body: String) = MockResponse.Builder()

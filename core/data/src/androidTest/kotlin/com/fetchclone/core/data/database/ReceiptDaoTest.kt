@@ -64,7 +64,7 @@ class ReceiptDaoTest {
         dao.insert(receipt("awarded", ReceiptStatusColumn.AWARDED))
         dao.insert(receipt("rejected", ReceiptStatusColumn.REJECTED))
 
-        val pending = dao.findPending(NOW, ReceiptStatus.MAX_UPLOAD_ATTEMPTS).map { it.id }
+        val pending = dao.findPending(USER_ID, NOW, ReceiptStatus.MAX_UPLOAD_ATTEMPTS).map { it.id }
 
         assertEquals(setOf("queued", "failed"), pending.toSet())
     }
@@ -77,7 +77,7 @@ class ReceiptDaoTest {
         // A fresh receipt has no deadline and is eligible immediately.
         dao.insert(receipt("fresh", ReceiptStatusColumn.QUEUED, nextAttemptAt = null))
 
-        val pending = dao.findPending(NOW, ReceiptStatus.MAX_UPLOAD_ATTEMPTS).map { it.id }
+        val pending = dao.findPending(USER_ID, NOW, ReceiptStatus.MAX_UPLOAD_ATTEMPTS).map { it.id }
 
         // `<= now` is inclusive; "exactly-now" is due.
         assertEquals(setOf("due", "exactly-now", "fresh"), pending.toSet())
@@ -90,7 +90,7 @@ class ReceiptDaoTest {
         dao.insert(receipt("one-left", ReceiptStatusColumn.FAILED, attemptCount = 4))
         dao.insert(receipt("spent", ReceiptStatusColumn.FAILED, attemptCount = 5))
 
-        val pending = dao.findPending(NOW, ReceiptStatus.MAX_UPLOAD_ATTEMPTS).map { it.id }
+        val pending = dao.findPending(USER_ID, NOW, ReceiptStatus.MAX_UPLOAD_ATTEMPTS).map { it.id }
 
         assertEquals(listOf("one-left"), pending)
     }
@@ -171,7 +171,7 @@ class ReceiptDaoTest {
         val row = dao.findById(ID)!!
         assertNull(row.nextAttemptAt)
         assertEquals(0, row.attemptCount)
-        assertEquals(0, dao.countPendingUploads(ReceiptStatus.MAX_UPLOAD_ATTEMPTS))
+        assertEquals(0, dao.countPendingUploads(USER_ID, ReceiptStatus.MAX_UPLOAD_ATTEMPTS))
     }
 
     @Test
@@ -228,7 +228,7 @@ class ReceiptDaoTest {
         dao.insert(receipt("processing", ReceiptStatusColumn.PROCESSING, serverId = "51"))
         dao.insert(receipt("spent", ReceiptStatusColumn.FAILED, attemptCount = 5))
 
-        assertEquals(2, dao.countPendingUploads(ReceiptStatus.MAX_UPLOAD_ATTEMPTS))
+        assertEquals(2, dao.countPendingUploads(USER_ID, ReceiptStatus.MAX_UPLOAD_ATTEMPTS))
     }
 
     // ---------------------------------------------------------------------------------
@@ -236,12 +236,12 @@ class ReceiptDaoTest {
     // ---------------------------------------------------------------------------------
 
     @Test
-    fun observeAll_ordersByCaptureTimeDescending() = runTest {
+    fun observeForUser_ordersByCaptureTimeDescending() = runTest {
         dao.insert(receipt("older", ReceiptStatusColumn.QUEUED, capturedAt = NOW - 10_000))
         dao.insert(receipt("newest", ReceiptStatusColumn.QUEUED, capturedAt = NOW))
         dao.insert(receipt("middle", ReceiptStatusColumn.QUEUED, capturedAt = NOW - 5_000))
 
-        val ids = dao.observeAll().first().map { it.id }
+        val ids = dao.observeForUser(USER_ID).first().map { it.id }
 
         // Chronological history: a receipt must not jump position as it uploads.
         assertEquals(listOf("newest", "middle", "older"), ids)
@@ -254,7 +254,7 @@ class ReceiptDaoTest {
         // receipt it has no way to look up.
         dao.insert(receipt("malformed", ReceiptStatusColumn.PROCESSING, serverId = null))
 
-        assertEquals(listOf("reconcilable"), dao.findProcessing().map { it.id })
+        assertEquals(listOf("reconcilable"), dao.findProcessing(USER_ID).map { it.id })
     }
 
     private fun receipt(
@@ -264,8 +264,10 @@ class ReceiptDaoTest {
         nextAttemptAt: Long? = null,
         serverId: String? = null,
         capturedAt: Long = NOW,
+        userId: Int = USER_ID,
     ) = ReceiptEntity(
         id = id,
+        userId = userId,
         capturedAt = capturedAt,
         lineItemsJson = LINE_ITEMS_JSON,
         status = status,
@@ -275,6 +277,7 @@ class ReceiptDaoTest {
     )
 
     private companion object {
+        const val USER_ID = 7
         const val ID = "11111111-1111-1111-1111-111111111111"
         const val NOW = 1_756_800_000_000L
         const val LINE_ITEMS_JSON =

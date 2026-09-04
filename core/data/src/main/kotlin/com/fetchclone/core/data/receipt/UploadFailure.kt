@@ -68,6 +68,47 @@ internal sealed interface UploadFailure {
      * that has never been transmitted is not a futile retry, it is an untried one.
      */
     data object Deferred : UploadFailure
+
+    /**
+     * There is no valid session to upload under. **Retryable, and it must NOT consume an
+     * attempt.**
+     *
+     * ### The bug this type exists to prevent
+     *
+     * Before authentication, this file said of 401: *"retryable after a token refresh,
+     * which makes it neither terminal nor plain-retryable but a third thing: recoverable by
+     * side effect… not special-cased here because this app has no auth."* The app has auth
+     * now, and without this branch the prediction comes true in the worst way.
+     *
+     * A 401 is a 4xx, so [classifyUploadFailure] would have called it [Rejected]. The
+     * receipt would be marked terminally `REJECTED`, and the user would be told **their
+     * receipt was refused** — a permanent, false verdict about their shopping, caused by
+     * their session expiring. It is the airplane-mode bug wearing a different hat: a
+     * problem that has nothing to do with the receipt, charged to the receipt.
+     *
+     * ### Why a 401 reaching here at all means the session is dead
+     *
+     * `TokenAuthenticator` intercepts 401s beneath Retrofit and replays the request with a
+     * fresh token. A 401 that surfaces to this classifier is therefore one that survived
+     * that: refresh was attempted and failed, or there was nothing to refresh with. Either
+     * way the credential problem is not solvable by retrying now — but it *is* solvable, by
+     * the user signing in again.
+     *
+     * So the handling matches [Deferred]: leave the row `QUEUED`, do not touch
+     * `attemptCount`, arm no backoff. The receipt waits for a session the way an offline
+     * receipt waits for a radio. `processQueue` also refuses to start a pass while signed
+     * out, so this is the narrow race — a session dying mid-pass — rather than the common
+     * path.
+     *
+     * ### Why not simply reuse [Deferred]
+     *
+     * The row treatment is identical, so one type would work. Two exist because the
+     * *diagnosis* differs, and these types are read as an explanation of what happened as
+     * much as an instruction: [Deferred] means "no radio", this means "no session". A log
+     * or a future UI message that conflated them would send a signed-out user to check
+     * their connection.
+     */
+    data object Unauthenticated : UploadFailure
 }
 
 /**
@@ -91,19 +132,21 @@ internal sealed interface UploadFailure {
  *
  * ### 401 and 429 are the two worth arguing about
  *
- * Both are 4xx and both fall into the terminal bucket above, and in a production client
- * both would be wrong there.
+ * Both are 4xx, and neither belongs in the terminal bucket. This comment used to say that
+ * neither was special-cased "because this app has no auth" — one of those two has since
+ * come true, which is a decent argument for writing down the exceptions you are choosing
+ * not to handle yet.
  *
+ * - **401 Unauthorized** is retryable *after* a token refresh, which makes it neither
+ *   terminal nor plain-retryable but a third thing: recoverable by side effect. It is now
+ *   handled, as [UploadFailure.Unauthenticated], and the branch is placed above the 4xx
+ *   sweep so it cannot be swallowed by it.
  * - **429 Too Many Requests** is explicitly a "try again later" signal, with the delay
  *   often given in `Retry-After`. It is a 4xx that is unambiguously retryable — the single
  *   clearest counterexample to "4xx is terminal", and the reason that rule is a strong
- *   default rather than a law.
- * - **401 Unauthorized** is retryable *after* a token refresh, which makes it neither
- *   terminal nor plain-retryable but a third thing: recoverable by side effect.
- *
- * Neither is special-cased here because this app has no auth and DummyJSON has no rate
- * limit, so the handling would be untestable code written against an imagined contract.
- * Knowing they are the exceptions matters more than pre-writing branches for them.
+ *   default rather than a law. Still not special-cased, because DummyJSON has no rate
+ *   limit: the branch would be written against an imagined contract and exercised only by
+ *   a fake. The right time to add it is when a backend actually sends one.
  *
  * ## The connectivity split
  *
@@ -119,6 +162,10 @@ internal sealed interface UploadFailure {
  */
 internal fun classifyUploadFailure(error: Throwable, isOnline: Boolean): UploadFailure = when (error) {
     is HttpException -> when (val code = error.code()) {
+        // 401 is checked BEFORE the 4xx sweep, and the ordering is the whole point: it is
+        // a 4xx that must not be treated as a verdict on the receipt. See
+        // UploadFailure.Unauthenticated.
+        HTTP_UNAUTHORIZED -> UploadFailure.Unauthenticated
         in 400..499 -> UploadFailure.Rejected(rejectReasonForStatus(code))
         // 5xx, and anything else non-2xx that Retrofit surfaced as an HttpException.
         else -> UploadFailure.Retryable
@@ -159,6 +206,8 @@ internal fun classifyUploadFailure(error: Throwable, isOnline: Boolean): UploadF
     // before classifying. See `DefaultReceiptRepository.uploadOne`.
     else -> UploadFailure.Retryable
 }
+
+private const val HTTP_UNAUTHORIZED = 401
 
 private fun rejectReasonForStatus(code: Int): RejectReason = when (code) {
     409 -> RejectReason.DUPLICATE

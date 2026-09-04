@@ -1,5 +1,6 @@
 package com.fetchclone.feature.offers
 
+import com.fetchclone.core.testing.MainDispatcherRule
 import app.cash.turbine.test
 import com.fetchclone.core.data.model.Offer
 import com.fetchclone.core.data.repository.FeedRefreshState

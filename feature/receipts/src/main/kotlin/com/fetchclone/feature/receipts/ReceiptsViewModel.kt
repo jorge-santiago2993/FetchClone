@@ -114,9 +114,10 @@ class ReceiptsViewModel @Inject constructor(
      * is nothing to wait for** — which is the offline-first design showing up in the UI
      * layer as an absence.
      *
-     * The only branch worth handling is [SubmitResult.NoOffersCached], an artefact of
-     * faking capture from the offers cache. It becomes a transient message rather than a
-     * screen state, because nothing about the list has changed.
+     * Two branches need handling, and both become a transient message rather than a screen
+     * state, because in neither case has the list changed:
+     * [SubmitResult.NoOffersCached] (an artefact of faking capture from the offers cache)
+     * and [SubmitResult.SignedOut] (a session that expired between render and tap).
      */
     fun onScanReceipt() {
         viewModelScope.launch {
@@ -127,6 +128,8 @@ class ReceiptsViewModel @Inject constructor(
                 is SubmitResult.Success -> Unit
 
                 SubmitResult.NoOffersCached -> userMessage.value = UserMessage.NO_OFFERS_TO_SCAN
+
+                SubmitResult.SignedOut -> userMessage.value = UserMessage.SIGNED_OUT
             }
         }
     }

@@ -189,6 +189,9 @@ private fun ReceiptsEmptyState(modifier: Modifier = Modifier) {
 private fun UserMessage.text(): String = when (this) {
     UserMessage.NO_OFFERS_TO_SCAN ->
         "Open the Offers tab first so there are products to scan."
+
+    UserMessage.SIGNED_OUT ->
+        "Your session ended. Sign in again to scan receipts."
 }
 
 // ---------------------------------------------------------------------------------

@@ -35,7 +35,7 @@ import retrofit2.http.Path
 interface CartsApi {
 
     /**
-     * `POST /carts/add` — submits a receipt's line items.
+     * `POST /auth/carts/add` — submits a receipt's line items.
      *
      * ### The `Idempotency-Key` header is the load-bearing part of this signature
      *
@@ -60,14 +60,14 @@ interface CartsApi {
      * widely copied). A real integration would use whatever the backend documents, and the
      * `X-` prefix convention is deprecated by RFC 6648, so the unprefixed name is correct.
      */
-    @POST("carts/add")
+    @POST("auth/carts/add")
     suspend fun addCart(
         @Header(HEADER_IDEMPOTENCY_KEY) idempotencyKey: String,
         @Body body: CartRequest,
     ): CartResponse
 
     /**
-     * `GET /carts/{id}` — re-fetches a submitted receipt during reconciliation.
+     * `GET /auth/carts/{id}` — re-fetches a submitted receipt during reconciliation.
      *
      * **Expect this to 404 in this app, and treat that as "still processing".** DummyJSON
      * simulates writes without persisting them: `POST /carts/add` returns id 51 while only
@@ -80,7 +80,7 @@ interface CartsApi {
      * would mark perfectly healthy receipts as broken. `RemoteReceiptProcessor` is where
      * that mapping lives.
      */
-    @GET("carts/{id}")
+    @GET("auth/carts/{id}")
     suspend fun getCart(@Path("id") cartId: String): CartResponse
 
     companion object {

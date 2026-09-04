@@ -27,6 +27,9 @@ rootProject.name = "FetchClone"
 
 include(":app")
 include(":core:data")
+include(":core:network")
+include(":core:testing")
 include(":core:ui")
+include(":feature:auth")
 include(":feature:offers")
 include(":feature:receipts")

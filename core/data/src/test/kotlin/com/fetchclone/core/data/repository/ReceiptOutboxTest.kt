@@ -6,6 +6,7 @@ import com.fetchclone.core.data.database.entity.ReceiptStatusColumn
 import com.fetchclone.core.data.model.Receipt
 import com.fetchclone.core.data.model.ReceiptStatus
 import com.fetchclone.core.data.model.RejectReason
+import com.fetchclone.core.data.receipt.FakeAuthRepository
 import com.fetchclone.core.data.receipt.FakeCartsApi
 import com.fetchclone.core.data.receipt.FakeNetworkMonitor
 import com.fetchclone.core.data.receipt.FakeOffersDao
@@ -16,6 +17,7 @@ import com.fetchclone.core.data.receipt.ReceiptProcessor
 import com.fetchclone.core.data.receipt.ReceiptScanner
 import com.fetchclone.core.data.receipt.RecordingOutboxSyncScheduler
 import com.fetchclone.core.data.receipt.RetryBackoff
+import com.fetchclone.core.data.receipt.TEST_USER_ID
 import com.fetchclone.core.data.receipt.httpException
 import com.fetchclone.core.data.receipt.ioException
 import com.fetchclone.core.data.network.model.CartResponse
@@ -65,6 +67,7 @@ class ReceiptOutboxTest {
     private val scheduler = RecordingOutboxSyncScheduler()
     private val clock = MutableTestClock(nowMillis = NOW)
     private val networkMonitor = FakeNetworkMonitor(online = true)
+    private val authRepository = FakeAuthRepository()
     private var processorOutcome: ReceiptOutcome = ReceiptOutcome.StillProcessing
 
     // ---------------------------------------------------------------------------------
@@ -176,7 +179,7 @@ class ReceiptOutboxTest {
         assertEquals(
             "a rejected receipt must not be reported as outstanding work",
             0,
-            dao.countPendingUploads(ReceiptStatus.MAX_UPLOAD_ATTEMPTS),
+            dao.countPendingUploads(TEST_USER_ID, ReceiptStatus.MAX_UPLOAD_ATTEMPTS),
         )
     }
 
@@ -340,7 +343,7 @@ class ReceiptOutboxTest {
         )
         // Status stays FAILED; exhaustion is derived from the counter, not a new status.
         assertEquals(ReceiptStatusColumn.FAILED, row.status)
-        assertEquals(0, dao.countPendingUploads(ReceiptStatus.MAX_UPLOAD_ATTEMPTS))
+        assertEquals(0, dao.countPendingUploads(TEST_USER_ID, ReceiptStatus.MAX_UPLOAD_ATTEMPTS))
     }
 
     @Test
@@ -577,9 +580,11 @@ class ReceiptOutboxTest {
     private fun repository(
         scope: TestScope,
         offers: List<OfferEntity> = listOf(offer()),
+        auth: FakeAuthRepository = authRepository,
     ) = DefaultReceiptRepository(
         receiptDao = dao,
         cartsApi = api,
+        authRepository = auth,
         scanner = ReceiptScanner(FakeOffersDao(offers)),
         networkMonitor = networkMonitor,
         processor = StubProcessor { processorOutcome },
@@ -591,8 +596,9 @@ class ReceiptOutboxTest {
         applicationScope = scope,
     )
 
-    private fun queuedReceipt(id: String) = ReceiptEntity(
+    private fun queuedReceipt(id: String, userId: Int = TEST_USER_ID) = ReceiptEntity(
         id = id,
+        userId = userId,
         capturedAt = NOW,
         lineItemsJson = LINE_ITEMS_JSON,
         status = ReceiptStatusColumn.QUEUED,

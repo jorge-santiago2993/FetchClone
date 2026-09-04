@@ -6,13 +6,19 @@ import com.fetchclone.core.data.database.dao.ReceiptDao
 import com.fetchclone.core.data.database.entity.OfferEntity
 import com.fetchclone.core.data.database.entity.ReceiptEntity
 import com.fetchclone.core.data.database.entity.ReceiptStatusColumn
+import com.fetchclone.core.data.model.AuthState
+import com.fetchclone.core.data.model.AuthUser
+import com.fetchclone.core.data.model.SignOutReason
 import com.fetchclone.core.data.network.CartsApi
 import com.fetchclone.core.data.network.NetworkMonitor
 import com.fetchclone.core.data.network.model.CartRequest
 import com.fetchclone.core.data.network.model.CartResponse
+import com.fetchclone.core.data.repository.AuthRepository
+import com.fetchclone.core.data.repository.LoginOutcome
 import com.fetchclone.core.data.work.OutboxSyncScheduler
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -68,6 +74,47 @@ internal class MutableTestClock(
     fun advanceBy(millis: Long) { nowMillis += millis }
 }
 
+/** The account every fixture in these tests belongs to. */
+internal const val TEST_USER_ID = 7
+
+/**
+ * A signed-in session that tests can end.
+ *
+ * Only the two members the outbox actually uses are meaningful; the rest exist to satisfy
+ * the interface. [signOut] is what makes the auth-gate tests possible -- it is the closest
+ * a JVM test gets to "the user's refresh token expired mid-pass".
+ */
+internal class FakeAuthRepository(
+    user: AuthUser? = AuthUser(
+        id = TEST_USER_ID,
+        username = "emilys",
+        firstName = "Emily",
+        lastName = "Johnson",
+        email = "emily@example.com",
+        avatarUrl = "",
+    ),
+) : AuthRepository {
+
+    private val state = MutableStateFlow<AuthState>(
+        if (user == null) AuthState.SignedOut(SignOutReason.NEVER_SIGNED_IN)
+        else AuthState.Authenticated(user),
+    )
+
+    override val authState: StateFlow<AuthState> = state
+
+    override fun currentUser(): AuthUser? = (state.value as? AuthState.Authenticated)?.user
+
+    override suspend fun restoreSession() = Unit
+
+    override suspend fun login(username: String, password: String) = LoginOutcome.Success
+
+    override suspend fun logout() = signOut()
+
+    fun signOut() {
+        state.value = AuthState.SignedOut(SignOutReason.SESSION_EXPIRED)
+    }
+}
+
 /**
  * In-memory [ReceiptDao] that mirrors the real DAO's guarded updates.
  *
@@ -93,26 +140,32 @@ internal class FakeReceiptDao : ReceiptDao {
         rows.value = rows.value + (receipt.id to receipt)
     }
 
-    /** `ORDER BY capturedAt DESC` */
-    override fun observeAll(): Flow<List<ReceiptEntity>> =
-        rows.map { it.values.sortedByDescending(ReceiptEntity::capturedAt) }
+    /** `WHERE userId = :userId ORDER BY capturedAt DESC` */
+    override fun observeForUser(userId: Int): Flow<List<ReceiptEntity>> =
+        rows.map { all ->
+            all.values
+                .filter { it.userId == userId }
+                .sortedByDescending(ReceiptEntity::capturedAt)
+        }
 
     override suspend fun findById(id: String): ReceiptEntity? = rows.value[id]
 
     /**
-     * Mirrors: `status IN (QUEUED, FAILED) AND (nextAttemptAt IS NULL OR nextAttemptAt <=
-     * :now) AND attemptCount < :maxAttempts ORDER BY capturedAt ASC`
+     * Mirrors: `userId = :userId AND status IN (QUEUED, FAILED) AND (nextAttemptAt IS NULL
+     * OR nextAttemptAt <= :now) AND attemptCount < :maxAttempts ORDER BY capturedAt ASC`
      */
-    override suspend fun findPending(now: Long, maxAttempts: Int): List<ReceiptEntity> =
+    override suspend fun findPending(userId: Int, now: Long, maxAttempts: Int): List<ReceiptEntity> =
         rows.value.values
+            .filter { it.userId == userId }
             .filter { it.status == ReceiptStatusColumn.QUEUED || it.status == ReceiptStatusColumn.FAILED }
             .filter { it.nextAttemptAt == null || it.nextAttemptAt!! <= now }
             .filter { it.attemptCount < maxAttempts }
             .sortedBy(ReceiptEntity::capturedAt)
 
-    /** Mirrors: `status = PROCESSING AND serverId IS NOT NULL ORDER BY capturedAt ASC` */
-    override suspend fun findProcessing(): List<ReceiptEntity> =
+    /** Mirrors: `userId = :userId AND status = PROCESSING AND serverId IS NOT NULL` */
+    override suspend fun findProcessing(userId: Int): List<ReceiptEntity> =
         rows.value.values
+            .filter { it.userId == userId }
             .filter { it.status == ReceiptStatusColumn.PROCESSING && it.serverId != null }
             .sortedBy(ReceiptEntity::capturedAt)
 
@@ -177,12 +230,14 @@ internal class FakeReceiptDao : ReceiptDao {
     ) { it.copy(status = ReceiptStatusColumn.QUEUED) }
 
     /**
-     * Mirrors: `status IN (QUEUED, FAILED) AND attemptCount < :maxAttempts` — deliberately
-     * with **no** `nextAttemptAt` filter, matching the real query.
+     * Mirrors: `userId = :userId AND status IN (QUEUED, FAILED) AND attemptCount <
+     * :maxAttempts` — deliberately with **no** `nextAttemptAt` filter, matching the real
+     * query.
      */
-    override suspend fun countPendingUploads(maxAttempts: Int): Int =
+    override suspend fun countPendingUploads(userId: Int, maxAttempts: Int): Int =
         rows.value.values.count {
-            (it.status == ReceiptStatusColumn.QUEUED || it.status == ReceiptStatusColumn.FAILED) &&
+            it.userId == userId &&
+                (it.status == ReceiptStatusColumn.QUEUED || it.status == ReceiptStatusColumn.FAILED) &&
                 it.attemptCount < maxAttempts
         }
 

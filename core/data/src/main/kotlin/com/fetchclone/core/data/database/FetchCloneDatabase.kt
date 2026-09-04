@@ -75,7 +75,7 @@ import com.fetchclone.core.data.database.entity.ReceiptEntity
         OfferEntity::class,
         OfferRemoteKeyEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class FetchCloneDatabase : RoomDatabase() {

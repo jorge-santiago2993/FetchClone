@@ -12,9 +12,14 @@ import coil3.SingletonImageLoader
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
 import com.fetchclone.core.data.di.ApplicationScope
+import com.fetchclone.core.data.model.AuthState
+import com.fetchclone.core.data.repository.AuthRepository
 import com.fetchclone.core.data.repository.ReceiptRepository
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -54,6 +59,18 @@ class FetchCloneApplication :
     lateinit var receiptRepository: ReceiptRepository
 
     /**
+     * The session. Injected here because restoring it is **process-level startup work**:
+     * it reads an encrypted file and decides which half of the app exists, and it has to
+     * happen before the first frame commits to a decision.
+     *
+     * A ViewModel's `init` is the tempting alternative and is subtly wrong — a ViewModel
+     * is scoped to a composition, not to a process. `Application.onCreate` is the one
+     * place in an Android app that runs exactly once per process.
+     */
+    @Inject
+    lateinit var authRepository: AuthRepository
+
+    /**
      * The process-lifetime scope from `CoroutineModule`. [onStart] is a non-suspending
      * lifecycle callback, so the work has to be launched into a scope, and it must be one
      * that is not tied to any screen.
@@ -83,7 +100,67 @@ class FetchCloneApplication :
 
     override fun onCreate() {
         super.onCreate()
+        restoreSession()
+        observeSession()
         observeProcessLifecycle()
+    }
+
+    /**
+     * Reads any stored session from disk and publishes the result.
+     *
+     * Until this completes, `AuthState` is `Unknown` and the UI shows a spinner rather
+     * than guessing. Guessing wrong in either direction is visible: a login screen that
+     * flashes past a signed-in user, or a feed that renders empty for someone who is not
+     * signed in at all.
+     *
+     * Launched rather than blocked on. `onCreate` runs on the main thread and this does
+     * file I/O plus, usually, a network round trip to validate the session — blocking here
+     * would delay the first frame of every cold start by the length of a request.
+     */
+    private fun restoreSession() {
+        applicationScope.launch { authRepository.restoreSession() }
+    }
+
+    /**
+     * The receipt outbox's **fourth trigger: a session becoming available.**
+     *
+     * ## Why the existing three were not enough
+     *
+     * The outbox had triggers on submit, on app foreground, and from `WorkManager`. Adding
+     * authentication broke a case none of them covered, and it is a good example of a new
+     * feature invalidating an old assumption rather than a bug in either.
+     *
+     * `processQueue` now refuses to run without a session, and reports no outstanding work
+     * when there is none — so nothing is rescheduled while signed out. That is correct: a
+     * worker re-armed with no session would wake, find no session, and re-arm itself
+     * indefinitely.
+     *
+     * But it means that after signing in, **nothing was left to start the drain.** The
+     * foreground trigger had already fired (the user has been in the app the whole time,
+     * typing a password), submit is not involved, and the worker was never enqueued. A user
+     * whose session expired with receipts queued would have watched them sit there until
+     * they next backgrounded and reopened the app.
+     *
+     * Signing in is precisely the event that unblocks that work, so it is the trigger.
+     *
+     * ## Why `distinctUntilChanged` on the user id
+     *
+     * `AuthState.Authenticated` re-emits whenever the profile object changes — a refreshed
+     * avatar URL would do it — and every emission would otherwise start a drain. Keying on
+     * the id means this fires on *becoming a different signed-in user*, which is the actual
+     * event, and covers both first sign-in and account switching.
+     */
+    private fun observeSession() {
+        applicationScope.launch {
+            authRepository.authState
+                .filterIsInstance<AuthState.Authenticated>()
+                .map { it.user.id }
+                .distinctUntilChanged()
+                .collect {
+                    launch { receiptRepository.processQueue() }
+                    launch { receiptRepository.reconcileProcessing() }
+                }
+        }
     }
 
     /**

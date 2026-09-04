@@ -47,21 +47,17 @@ import kotlinx.serialization.Serializable
  * global change made to fix one DTO — it would start emitting defaults for every other
  * model too, changing payloads nobody was looking at.
  *
- * @property userId the submitting account. Callers pass [DEFAULT_USER_ID]: there is no
- *   auth in this app, and inventing an account system to satisfy a field a fake backend
- *   barely checks would be scope with no payoff. In a real client this comes from the
- *   session.
+ * @property userId the submitting account. **Now genuinely the signed-in user**, read from
+ *   `ReceiptEntity.userId`, which is stamped at capture from the session. This used to be a
+ *   `DEFAULT_USER_ID` constant, and the doc here said "in a real client this comes from the
+ *   session" — the constant is gone and that sentence is now a description rather than a
+ *   promissory note.
  */
 @Serializable
 data class CartRequest(
     val userId: Int,
     val products: List<CartProductRequest>,
-) {
-    companion object {
-        /** DummyJSON ships 30 users; 1 always exists. */
-        const val DEFAULT_USER_ID = 1
-    }
-}
+)
 
 /**
  * One line of the submitted cart.

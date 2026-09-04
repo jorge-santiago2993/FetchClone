@@ -1,5 +1,6 @@
 package com.fetchclone.feature.receipts
 
+import com.fetchclone.core.testing.MainDispatcherRule
 import app.cash.turbine.test
 import com.fetchclone.core.data.model.Receipt
 import com.fetchclone.core.data.model.ReceiptLineItem

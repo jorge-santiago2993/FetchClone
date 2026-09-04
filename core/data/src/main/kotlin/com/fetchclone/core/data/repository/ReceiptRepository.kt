@@ -55,8 +55,9 @@ interface ReceiptRepository {
      * The alternative — POST first, show a spinner, write on success — is simpler and
      * fails exactly when a receipt app is most used: standing in a shop with bad signal.
      *
-     * @return [SubmitResult.Success] with the new receipt's id, or
-     *   [SubmitResult.NoOffersCached] when there is nothing to fabricate a scan from.
+     * @return [SubmitResult.Success] with the new receipt's id,
+     *   [SubmitResult.NoOffersCached] when there is nothing to fabricate a scan from, or
+     *   [SubmitResult.SignedOut] when there is no account to attribute it to.
      */
     suspend fun submitSimulatedScan(): SubmitResult
 
@@ -124,4 +125,14 @@ sealed interface SubmitResult {
      * see `ReceiptScanner`.
      */
     data object NoOffersCached : SubmitResult
+
+    /**
+     * There is no signed-in user, so the receipt has no owner to be captured against.
+     *
+     * Reachable only through a race — the scan button lives behind the authenticated
+     * graph, so a session would have to expire between the screen rendering and the tap.
+     * Returned rather than swallowed because the alternative is inventing an owner, and a
+     * receipt attributed to the wrong account is worse than a receipt not taken.
+     */
+    data object SignedOut : SubmitResult
 }

@@ -1,13 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+   Auto Backup rules for API 30 and below. API 31+ uses data_extraction_rules.xml instead;
+   both files must agree, because a device can restore under either.
+
+   The only rule here is the session store, and it is a correctness rule before it is a
+   security one:
+
+   The refresh token in files/datastore/session.preferences_pb is encrypted with an
+   AES key held in the Android Keystore. Keystore keys are device-bound and are NEVER
+   included in a backup. So a restored copy of this file is ciphertext with no key –
+   undecryptable by construction. Backing it up cannot restore a session; it can only put
+   an encrypted credential somewhere it has no reason to be.
+
+   `KeystoreTokenCipher.decrypt` handles the undecryptable case anyway (it returns null,
+   the store clears itself, and the user signs in again), so this exclusion is the outer of
+   two independent defences rather than the only one.
+
+   Everything else – the Room cache and the receipt outbox – keeps the platform default
+   of being backed up. Receipts are un-uploaded user data and are worth restoring.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude
+        domain="file"
+        path="datastore/session.preferences_pb" />
 </full-backup-content>

@@ -1,19 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+   Backup and transfer rules for API 31+. The API 30-and-below equivalent is
+   backup_rules.xml, and the two must stay in step.
+
+   The session store is excluded from BOTH flows, and the second one is the interesting
+   case:
+
+   - cloud-backup: the encrypted refresh token is restored onto a device whose Keystore
+     never held the key that encrypts it. The file is undecryptable, so backing it up
+     achieves nothing and moves a credential off the device for no benefit.
+
+   - device-transfer: the same argument, and it is worth stating separately because the
+     instinct is that a direct phone-to-phone transfer should carry everything. It cannot
+     carry this. Keystore keys are hardware-bound and do not move between devices, by
+     design – that is precisely the property that makes storing the token there worth
+     doing. A transferred file would fail to decrypt on first launch on the new phone.
+
+   In both cases the user signs in again on the new device, which is the correct and
+   expected behaviour for a credential.
+
+   See KeystoreTokenCipher for the in-app handling of an undecryptable blob, which covers
+   this even if these rules are ever lost to a careless edit.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude
+            domain="file"
+            path="datastore/session.preferences_pb" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude
+            domain="file"
+            path="datastore/session.preferences_pb" />
     </device-transfer>
-    -->
 </data-extraction-rules>

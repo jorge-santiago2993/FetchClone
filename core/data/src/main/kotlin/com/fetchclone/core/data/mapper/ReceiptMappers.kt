@@ -74,10 +74,12 @@ import com.fetchclone.core.data.model.RejectReason
  */
 internal fun newReceiptEntity(
     id: String,
+    userId: Int,
     capturedAt: Long,
     lineItems: List<ReceiptLineItem>,
 ): ReceiptEntity = ReceiptEntity(
     id = id,
+    userId = userId,
     capturedAt = capturedAt,
     lineItemsJson = ReceiptLineItemsCodec.encode(lineItems),
     status = ReceiptStatusColumn.QUEUED,
